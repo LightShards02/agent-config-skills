@@ -47,7 +47,16 @@ Edit in the repo, push; other machines pull and regenerate. One writable source,
 
 ## Install
 
-Copy the four skill directories into your agent's skills location (e.g. `~/.claude/skills/`), then just ask your agent:
+**Claude Code (as a plugin):**
+
+```
+/plugin marketplace add LightShards02/agent-config-skills
+/plugin install agent-config-skills@agent-config-skills
+```
+
+**Any other Agent Skills–compatible tool** (Codex CLI, Cursor, …): copy the four skill directories into your agent's skills location (e.g. `~/.claude/skills/` or `~/.agents/skills/`).
+
+Then just ask your agent:
 
 > "Init my agent config on this machine."
 
