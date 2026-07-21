@@ -1,0 +1,13 @@
+{
+  "name": "agent-config-skills",
+  "displayName": "Agent Config Skills",
+  "version": "0.1.0",
+  "description": "Four-skill suite for managing your AI coding setup (skills, guidance, MCP servers) as one personal git repo, fanned out to Claude Code, Cursor, and Codex via Ruler: init, sync, new-project, and harvest.",
+  "author": {
+    "name": "LightShards02",
+    "url": "https://github.com/LightShards02"
+  },
+  "repository": "https://github.com/LightShards02/agent-config-skills",
+  "license": "MIT",
+  "keywords": ["agent-config", "skills", "mcp", "ruler", "dotfiles", "sync"]
+}

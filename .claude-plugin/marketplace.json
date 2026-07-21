@@ -1,0 +1,16 @@
+{
+  "name": "agent-config-skills",
+  "owner": {
+    "name": "LightShards02",
+    "url": "https://github.com/LightShards02"
+  },
+  "description": "Manage your AI coding setup as one personal git repo, fanned out to Claude Code, Cursor, and Codex.",
+  "plugins": [
+    {
+      "name": "agent-config-skills",
+      "source": "./",
+      "description": "Four-skill suite: bootstrap (~/agent-config) with agent-config-init, keep machines in sync with agent-config-sync, scaffold new repos with agent-config-new-project, and migrate existing repos with agent-config-harvest.",
+      "version": "0.1.0"
+    }
+  ]
+}
