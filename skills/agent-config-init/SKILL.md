@@ -30,7 +30,7 @@ mkdir -p ~/agent-config/{library/{skills,guidance,mcp},global/skills,projects/_t
 Standing files, each seeded **only if it does not exist**:
 
 - `library/mcp/servers.toml` — empty catalog with a comment explaining it holds every known `[mcp_servers.*]` block.
-- `bootstrap/doctor.sh` — the dependency executor (see below). Dependencies are **declared, not scripted**: a skill that needs a runtime carries a small `deps.toml` beside its SKILL.md (`runtimes = ["rg"]` — the binary names to check with `command -v`; plus optional `brew = ["ripgrep"]` when the Homebrew formula name differs from the binary). MCP server runtimes are derived from their `command` values in ruler.toml. doctor.sh unions both sources, reports what's missing, and installs only when invoked with `--install`. Never store executable install commands in the repo — a pulled repo whose sync auto-runs shell is an attack surface the day a skill is shared.
+- `bootstrap/doctor.sh` — the MCP runtime doctor (see below). Skill script dependencies are **not pre-provisioned**: skills are executed by agents, so a missing binary resolves at use time — the executing agent installs it with user approval, and skills with unusual requirements document them in their own SKILL.md. The doctor covers the one case with no agent in the loop: runtimes the tools need to *launch* the MCP servers declared in scoped ruler.toml files, derived mechanically from their `command` values (launchers imply their parent runtime — npx→node, uvx→uv; args are never parsed, since npx/uvx fetch the server package themselves). It reports what's missing and installs only when invoked with `--install`. Never store executable install commands in the repo — a pulled repo whose sync auto-runs shell is an attack surface the day a skill is shared.
 - `bootstrap/apply.sh` — the materialize-and-apply helper (see below). Scope dirs compose from the library via symlinks, but Ruler does **not** follow symlinked skill directories, so scopes must be materialized (`rsync -aL --delete`, dereferencing links into real files) into their consumption points before `ruler apply` runs.
 - `projects/_template/ruler.toml` — minimal ruler.toml that new project scopes copy from; generate via `ruler init` in a scratch dir, trim, and set `[gitignore] local = true` so Ruler writes its generated-file ignores to `.git/info/exclude` instead of the team-visible `.gitignore`. Also set `[backup] enabled = false` — Ruler otherwise drops a `.bak` beside every file it regenerates (`CLAUDE.md.bak`, `.mcp.json.bak`, …), which is pure litter in a system where everything is rebuildable from the scope dirs.
 - `global/ruler.toml` and `global/AGENTS.md` — the global scope.
@@ -46,10 +46,45 @@ Standing files, each seeded **only if it does not exist**:
 # machine-wide are build outputs regenerated from global/, never edited directly.
 # Usage: apply.sh --global | apply.sh <project-path> [scope-name]
 set -e
+AC="$HOME/agent-config"
+
+# Copy scope contents -> dest, dereferencing symlinks. rsync when the checkout
+# has real symlinks; otherwise a git-index-based fallback (Windows checkouts
+# with core.symlinks=false store symlinks as placeholder files, which rsync
+# cannot dereference). The fallback reads the git index, so `git add` newly
+# created scope files before applying.
+materialize() { # $1 = scope subdir inside $AC (e.g. "global"), $2 = dest dir
+  if command -v rsync >/dev/null 2>&1 && [ "$(git -C "$AC" config --get core.symlinks)" != "false" ]; then
+    rsync -aL --delete "$AC/$1/" "$2/"
+    return
+  fi
+  rm -rf "$2"; mkdir -p "$2"
+  git -C "$AC" ls-files -s -- "$1" | while read -r mode hash stage path; do
+    rel=${path#"$1/"}; out="$2/$rel"
+    mkdir -p "$(dirname "$out")"
+    if [ "$mode" = "120000" ]; then
+      tgt=$(git -C "$AC" cat-file blob "$hash")
+      cp -RL "$AC/$(dirname "$path")/$tgt" "$out"
+    else
+      cp "$AC/$path" "$out"
+    fi
+  done
+}
+
+# Create a directory link. Windows: junction (works without admin/Dev Mode);
+# elsewhere: plain symlink. Git Bash reports junctions via [ -L ], so the
+# idempotency checks below treat both the same.
+link_dir() { # $1 = target, $2 = link path
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      MSYS2_ARG_CONV_EXCL='*' cmd /c mklink /J "$(cygpath -w "$2")" "$(cygpath -w "$1")" >/dev/null ;;
+    *) ln -s "$1" "$2" ;;
+  esac
+}
+
 if [ "$1" = "--global" ]; then
-  AC="$HOME/agent-config"
   mkdir -p "$HOME/.config/ruler"
-  rsync -aL --delete "$AC/global/" "$HOME/.config/ruler/"
+  materialize global "$HOME/.config/ruler"
   # user-level guidance: regenerate ONLY files that are ours (marker) or absent —
   # an unmarked file predates this system and must be imported by init first
   for f in "$HOME/.claude/CLAUDE.md" "$HOME/.codex/AGENTS.md"; do
@@ -63,15 +98,15 @@ if [ "$1" = "--global" ]; then
   done
   # user-level skills: point each tool's user skill dir at the materialized copy
   for d in "$HOME/.claude/skills" "$HOME/.agents/skills"; do
-    if [ ! -e "$d" ]; then mkdir -p "$(dirname "$d")"; ln -s "$HOME/.config/ruler/skills" "$d"
+    if [ ! -e "$d" ]; then mkdir -p "$(dirname "$d")"; link_dir "$HOME/.config/ruler/skills" "$d"
     elif [ ! -L "$d" ]; then echo "warn: $d is a real dir; run agent-config-init to import it" >&2; fi
   done
   exit 0
 fi
 proj="$1"; scope="${2:-$(basename "$proj")}"
-src="$HOME/agent-config/projects/$scope"
+src="$AC/projects/$scope"
 [ -d "$src" ] || { echo "no scope '$scope' in ~/agent-config/projects" >&2; exit 1; }
-rsync -aL --delete "$src/" "$proj/.ruler/"
+materialize "projects/$scope" "$proj/.ruler"
 cd "$proj" && ruler apply --skills
 ```
 
@@ -79,28 +114,41 @@ cd "$proj" && ruler apply --skills
 
 ```sh
 #!/bin/sh
-# Dependency executor. Report by default; install missing runtimes with --install.
-# deps.toml keys: runtimes = ["rg"] (binaries to check); brew = ["ripgrep"] (install
-# names, when the formula differs from the binary — defaults to the runtime name).
-CFG="$HOME/agent-config"; missing=""; inst=""
-for f in "$CFG"/library/skills/*/deps.toml; do
-  [ -f "$f" ] || continue
-  rts=$(sed -n 's/^ *runtimes *= *\[\(.*\)\]/\1/p' "$f" | tr -d '",')
-  brews=$(sed -n 's/^ *brew *= *\[\(.*\)\]/\1/p' "$f" | tr -d '",')
-  for r in $rts; do
-    command -v "${r%%[<>=]*}" >/dev/null 2>&1 || { missing="$missing $r"; inst="$inst ${brews:-$r}"; }
-  done
-done
+# MCP runtime doctor. Skill dependencies resolve at use time (an agent is always
+# in the loop when a skill runs); this checks the one thing no agent is around
+# to fix: runtimes the tools need to LAUNCH the MCP servers declared in scoped
+# ruler.toml files. Derived from `command` values only — args are never parsed,
+# because launchers (npx/uvx) fetch the server package themselves.
+# Report by default; install with --install (known-safe runtimes only).
+CFG="$HOME/agent-config"; missing=""
+has_runtime() {
+  case "$1" in
+    python*) python3 --version >/dev/null 2>&1 || python --version >/dev/null 2>&1 ;;
+    /*) [ -x "$1" ] ;;
+    *) command -v "$1" >/dev/null 2>&1 ;;
+  esac
+}
 cmds=$(grep -rh '^command' "$CFG"/global/ruler.toml "$CFG"/projects/*/ruler.toml 2>/dev/null | sed 's/.*= *"\(.*\)"/\1/')
 for c in $cmds; do
   case "$c" in npx|node) r=node;; uvx|uv) r=uv;; python*) r=python3;; *) r=$c;; esac
-  command -v "$r" >/dev/null 2>&1 && continue
-  case " $missing " in *" $r "*) ;; *) missing="$missing $r"; inst="$inst $r";; esac
+  has_runtime "$r" && continue
+  case " $missing " in *" $r "*) ;; *) missing="$missing $r";; esac
 done
-[ -z "$missing" ] && { echo "doctor: all dependencies present"; exit 0; }
+[ -z "$missing" ] && { echo "doctor: all MCP runtimes present"; exit 0; }
 echo "doctor: missing:$missing"
 if [ "$1" = "--install" ]; then
-  for m in $(echo $inst | tr ' ' '\n' | sort -u); do brew install "$m"; done
+  for m in $missing; do
+    case "$m" in
+      node|uv|docker|python3)
+        if command -v brew >/dev/null 2>&1; then brew install "$m"
+        elif command -v winget >/dev/null 2>&1; then
+          winget install -e --id "$m" --accept-source-agreements --accept-package-agreements \
+            || winget install "$m" --accept-source-agreements --accept-package-agreements
+        else echo "doctor: no installer (brew/winget); install manually: $m" >&2; fi ;;
+      /*) echo "doctor: '$m' is an absolute path — a machine-local server; check whether it belongs in the repo" >&2 ;;
+      *) echo "doctor: no known install method for '$m' — resolve with the user, don't guess" >&2 ;;
+    esac
+  done
 fi
 ```
 
@@ -108,7 +156,7 @@ Machine wiring, likewise convergent:
 
 - Install Ruler if missing (`npm install -g @intellectronica/ruler`, Node ≥ 20.19).
 - Materialize the global scope: `bootstrap/apply.sh --global`. If `~/.config/ruler` already exists as a hand-managed directory from before this system, import its contents **first** (merge into `global/`/`library/`, dedup against what pulled down in step 1) — the first materialization overwrites it.
-- Run `bootstrap/doctor.sh` — on every init, fresh or join. Even a fresh init can import skills or harvest MCP servers whose runtimes this machine lacks (a docker-based server on a machine without Docker, say). Install what's missing with `doctor.sh --install` after user approval.
+- Run `bootstrap/doctor.sh` — on every init, fresh or join. Even a fresh init can bring in MCP servers whose launch runtimes this machine lacks (a docker-based server on a machine without Docker, say). Install what's missing with `doctor.sh --install` after user approval.
 
 ## 3. Import and push the global (machine-level) skills
 
@@ -116,9 +164,9 @@ Gather skills and guidance that live at the user level on *this machine* and fol
 
 1. Look in the user-level tool dirs: `~/.claude/skills/`, `~/.claude/CLAUDE.md`, `~/.codex/`, `~/.agents/skills/`, `~/.kimi/skills/`, and user-level MCP configs (`~/.claude.json` MCP entries, `~/.cursor/mcp.json`). Show the user what was found.
 2. Deduplicate — both across this machine's tools *and against what already exists in the pulled library* — the way `agent-config-harvest` does: hash-compare same-named skills, auto-keep identical copies, diff divergent ones for the user. On a joining machine most content will already be in the library; only genuinely new or diverged items need attention.
-3. Move surviving new skills into `library/skills/`, symlink each from `global/skills/` (relative targets). If an imported skill needs a runtime (script shebangs are the tell), declare it in that skill's `deps.toml` (`runtimes = ["python3"]`). User-level instruction content merges into `global/AGENTS.md`, with reusable sections split into `library/guidance/`. User-level MCP servers become `[mcp_servers.*]` blocks in `global/ruler.toml` plus catalog entries in `library/mcp/servers.toml` — their runtimes need no separate record; doctor.sh derives them from the `command` values.
+3. Move surviving new skills into `library/skills/`, symlink each from `global/skills/` (relative targets). User-level instruction content merges into `global/AGENTS.md`, with reusable sections split into `library/guidance/`. User-level MCP servers become `[mcp_servers.*]` blocks in `global/ruler.toml` plus catalog entries in `library/mcp/servers.toml` — their runtimes need no separate record; doctor.sh derives them from the `command` values.
 4. Re-run `bootstrap/apply.sh --global`. This is the **user-level fan-out**: after it, `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` are regenerated from `global/AGENTS.md` (with a "generated by agent-config" marker), and `~/.claude/skills` / `~/.agents/skills` are symlinks to the materialized skills. From this point those files are build outputs — all editing happens in `global/`. The script refuses to overwrite unmarked pre-existing files, which is why import (steps 1–3 above) must happen first; confirm with the user before the first replacement of any file they hand-maintained.
-5. Reconcile user-scope MCP the same way: every `[mcp_servers.*]` block in `global/ruler.toml` should be registered user-scope for Claude (`claude mcp add <name> --scope user -- <command> <args…>`) and for Codex (add the block to `[mcp_servers]` in `~/.codex/config.toml` — patch only those sections, never rewrite that file wholesale, it holds unrelated settings; or use `codex mcp add` if available). **Additive-only**: never delete user-scope servers the repo doesn't list — they may be personal or app-managed. ChatGPT desktop has no file-based config; its connectors remain manual.
+5. Reconcile user-scope MCP the same way: every `[mcp_servers.*]` block in `global/ruler.toml` should be registered user-scope for Claude (`claude mcp add <name> --scope user -- <command> <args…>`) and for Codex (add the block to `[mcp_servers]` in `~/.codex/config.toml` — patch only those sections, never rewrite that file wholesale, it holds unrelated settings; or use `codex mcp add` if available). URL-based (remote) servers use different forms: `claude mcp add <name> --scope user --transport http <url>` on the Claude side, and a `url = "…"` block (plus `bearer_token_env_var` if the server needs one) on the Codex side; any OAuth happens interactively in each tool on first use — there is nothing to store or reconcile for it. **Additive-only**: never delete user-scope servers the repo doesn't list — they may be personal or app-managed. ChatGPT desktop has no file-based config; its connectors remain manual.
 
 Commit and push whatever this machine contributed:
 

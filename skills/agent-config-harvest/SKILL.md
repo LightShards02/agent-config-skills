@@ -37,7 +37,7 @@ Different tools often hold divergent copies of the same skill. Resolve by conten
 
 For each surviving skill, check `~/agent-config/library/skills/<name>`:
 
-- Doesn't exist → move the skill into the library. If it needs a runtime (script shebangs are the tell), declare it in a `deps.toml` beside its SKILL.md (`runtimes = ["python3"]`).
+- Doesn't exist → move the skill into the library. (Runtime needs are not recorded anywhere — the agent executing the skill resolves missing binaries at use time; a skill with unusual requirements should say so in its own SKILL.md.)
 - Exists with identical content → discard the harvested copy; the scope will symlink the library version.
 - Exists with different content → diff and ask the user: merge into the library version (preferred — one skill, improved), or keep both under distinct names (`<name>` and `<name>-<repo>`) if they've genuinely forked.
 

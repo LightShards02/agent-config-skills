@@ -29,15 +29,7 @@ If the pull fails because of local uncommitted changes, show the user `git statu
 
 ### 2. Check and install dependencies (doctor step)
 
-The config declares what it needs; verify the machine can actually run it. Run `~/agent-config/bootstrap/doctor.sh` (report mode), then — with user approval — `doctor.sh --install` for anything missing. It unions two declaration sources:
-
-1. Each skill's `deps.toml` (`runtimes = [...]`) in `library/skills/*/`.
-2. Runtimes derived from `[mcp_servers.*]` `command` values in every ruler.toml (`npx`/`node` → Node, `uvx`/`uv` → uv, `docker` → Docker; any other command is itself the requirement).
-
-If doctor.sh doesn't exist (repo predates it), do the same two collections by hand — and seed the script from the init skill while you're there. Two follow-ups keep the system truthful:
-
-- If a runtime was missing because a skill never *declared* it, add the declaration to that skill's `deps.toml` and include it in the next push — otherwise every other machine rediscovers the same gap.
-- Tell the user what was installed and which skill or server needed it.
+Skill script dependencies are **not** checked here — skills are executed by agents, so a missing binary resolves at use time, when the executing agent has the exact error, the platform, and the user in the loop (skills with unusual requirements document them in their own SKILL.md). What sync must verify is the one case with no agent around to react: runtimes the tools need to *launch* MCP servers at session start. Run `~/agent-config/bootstrap/doctor.sh` (report mode), then — with user approval — `doctor.sh --install`. It derives requirements mechanically from `[mcp_servers.*]` `command` values in every scoped ruler.toml (`npx`/`node` → Node, `uvx`/`uv` → uv, `python*` → python3; any other command is itself the requirement; absolute-path commands are machine-local servers to question, not install; `url`-based servers need nothing). `--install` automates only the known-safe set (node, uv, docker, python3 — names that need no formula mapping) and prints everything else for review. If doctor.sh doesn't exist (repo predates it), do the same derivation by hand — and seed the script from the init skill while you're there. Tell the user what was installed and which server needed it; anything doctor can't automate, resolve with the user rather than guessing.
 
 ### 3. Re-materialize and re-apply everything
 
@@ -47,7 +39,7 @@ Global scope first (its consumption points are `~/.config/ruler` plus the user-l
 ~/agent-config/bootstrap/apply.sh --global
 ```
 
-If the script warns about an unmarked user-level file, that file predates management — hand it to `agent-config-init` for import rather than overwriting. Then reconcile user-scope MCP: every `[mcp_servers.*]` in `global/ruler.toml` should exist user-scope for Claude (`claude mcp add <name> --scope user -- <command> <args…>`) and Codex (`[mcp_servers]` blocks in `~/.codex/config.toml`, patching only those sections). Additive-only — never remove user-scope servers the repo doesn't list.
+If the script warns about an unmarked user-level file, that file predates management — hand it to `agent-config-init` for import rather than overwriting. Then reconcile user-scope MCP: every `[mcp_servers.*]` in `global/ruler.toml` should exist user-scope for Claude (`claude mcp add <name> --scope user -- <command> <args…>`; URL-based servers: `claude mcp add <name> --scope user --transport http <url>`) and Codex (`[mcp_servers]` blocks in `~/.codex/config.toml`, patching only those sections; URL-based servers use `url = "…"` instead of command/args). Additive-only — never remove user-scope servers the repo doesn't list. OAuth for remote servers happens in each tool on first use; nothing to store.
 
 Then every wired project:
 
@@ -81,6 +73,5 @@ Summarize: what changed in the pull, what dependencies were installed, which pro
 When the user has edited skills/guidance/MCP on this machine:
 
 1. Confirm the edits live in `~/agent-config` (library or scope dirs), not in build output. If a new skill was created inside a generated dir (e.g. `.claude/skills/` or a project's `.ruler/skills/`), move it into `library/skills/` and symlink it from the relevant scope dir first — otherwise the next apply clobbers it. Same rescue rule for guidance: if the user edited `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md` directly (old habit — they're generated now), merge that edit into `global/AGENTS.md` before re-running the fan-out.
-2. If a new skill introduced a runtime requirement, declare it in that skill's `deps.toml` in the same commit, so the doctor step on other machines stays truthful (MCP server runtimes need no declaration — doctor derives them from ruler.toml).
-3. `cd ~/agent-config && git add -A && git commit && git push`. Write a commit message naming what changed (which skill/scope), since other machines' pull logs are how the user tracks config history.
-4. Re-run the apply step (3 above) locally so this machine's build output reflects what was just committed.
+2. `cd ~/agent-config && git add -A && git commit && git push`. Write a commit message naming what changed (which skill/scope), since other machines' pull logs are how the user tracks config history.
+3. Re-run the apply step (3 above) locally so this machine's build output reflects what was just committed.

@@ -15,7 +15,7 @@ Everything you own lives **exactly once** in a private repo of yours (default `~
 ```
 agent-config/                  # your PRIVATE repo — the single source of truth
 ├── library/                   # every unit exists here exactly once
-│   ├── skills/<name>/         #   Agent Skills (+ optional deps.toml per skill)
+│   ├── skills/<name>/         #   Agent Skills
 │   ├── guidance/*.md          #   reusable instruction fragments
 │   └── mcp/servers.toml       #   catalog of every known MCP server block
 ├── global/                    # machine-wide scope: ruler.toml, AGENTS.md, skills -> library
@@ -65,7 +65,7 @@ Then just ask your agent:
 ## Design decisions worth knowing
 
 - **Materialization, not live symlinks.** Ruler does not follow symlinked skill directories, so scopes are rsync-dereferenced (`-aL --delete`) into their consumption points before every apply. Symlinks stay in the repo (browsable, deduplicated); tools always read real files.
-- **Dependencies are declared, not scripted.** A skill that needs a runtime carries a `deps.toml` (`runtimes = ["rg"]`, optional `brew = ["ripgrep"]`); MCP runtimes are derived from server `command` values. `doctor.sh` reports, and installs only with `--install` after approval. A pulled repo that auto-executes shell would be an attack surface — this one never does.
+- **Skill dependencies resolve lazily; MCP runtimes are checked eagerly.** Skills are executed by agents, so a missing binary is installed at use time — with the exact error, the platform, and the user present. MCP servers get no such luxury (tools launch them at session start with no agent in the loop), so `doctor.sh` derives their launch runtimes from server `command` values, reports, and installs only with `--install` after approval. A pulled repo that auto-executes shell would be an attack surface — this one never does.
 - **Pull-first, idempotent, convergent.** Every workflow fetches existing state before creating anything and treats "already exists" as a merge target. Re-running on a healthy machine changes nothing.
 - **Additive-only MCP reconcile.** User-scope servers the repo doesn't list are never removed — they may be personal or app-managed.
 - **Your repos stay yours.** Wiring uses `.git/info/exclude`, never the shared `.gitignore`; untracking previously-committed configs is offered with consequences explained, and only ever done with the repo owner's approval.

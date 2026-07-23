@@ -72,12 +72,12 @@ echo ".ruler" >> <project>/.git/info/exclude
 
 ### 7. Run the dependency check, then commit
 
-Linking library skills or catalog servers into a new scope can bring runtime needs this machine hasn't met yet — run `~/agent-config/bootstrap/doctor.sh` and install (with approval) anything missing.
+Adding catalog servers to a new scope can bring launch-runtime needs this machine hasn't met yet — run `~/agent-config/bootstrap/doctor.sh` and install (with approval) anything missing. (Skill dependencies resolve at use time, not here.)
 
 ```bash
 cd ~/agent-config
 git add projects/<name>          # plus library/ and bootstrap/ ONLY if this setup
-                                 # actually changed them (new catalog entry, new deps.toml)
+                                 # actually changed them (e.g. a new catalog entry)
 git commit -m "Add <name> project config"
 git push
 ```
